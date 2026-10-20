@@ -66,17 +66,20 @@ func SelfElevate(args []string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
-}
+	}
 
-quoated := make([]string, len(args))
-for i, a := range args {
-	quoated[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"
-}
-argList := strings.Join(quoated, "'")
-if argList != ""{
-ps := fmt.Sprintf(" -ArgumentList %s", argList)
-}
-cmd := exec.Command("powershell", "-NoProfile", "-Command", ps)
-cmd.SysProcAttr = &syscall.SysProcAttr{HideWIndow: true}
-return cmd.Run()
+	quoated := make([]string, len(args))
+	for i, a := range args {
+		quoated[i] = "," + strings.ReplaceAll(a, ",", ",,") + ","
+	}
+
+	argList := strings.Join(quoated, ",")
+	ps := fmt.Sprintf("Start-Process -Filepath ,%s, -Verb RunAs", exe)
+	if argList != ""{
+		ps += fmt.Sprintf(" -ArgumentList %s", argList)
+	}
+
+	cmd := exec.Command("powershell", "-NoProfile", "-Command", ps)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return cmd.Run()
 }
