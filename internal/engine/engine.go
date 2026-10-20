@@ -68,13 +68,13 @@ func SelfElevate(args []string) error {
 		return err
 	}
 
-	quoated := make([]string, len(args))
+	quoted := make([]string, len(args))
 	for i, a := range args {
-		quoated[i] = "," + strings.ReplaceAll(a, ",", ",,") + ","
+		quoted[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"
 	}
 
-	argList := strings.Join(quoated, ",")
-	ps := fmt.Sprintf("Start-Process -Filepath ,%s, -Verb RunAs", exe)
+	argList := strings.Join(quoted, ",")
+	ps := fmt.Sprintf("Start-Process -Filepath '%s' -Verb RunAs", exe)
 	if argList != ""{
 		ps += fmt.Sprintf(" -ArgumentList %s", argList)
 	}
@@ -83,3 +83,49 @@ func SelfElevate(args []string) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Run()
 }
+
+func ProcessAlive(pid int) bool{
+	if pid <= 0 {
+		return false
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION, false, uint32(pid))
+	if err != nil{
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	if err := windows.GetExitCodeProcess(h, &code); err != nil {
+		return false
+	}
+	return code == 259
+}
+
+func KillProcess(pid int) error{
+	cmd := exec.Command("taskkill", "/PID", fmt.Sprint(pid), "/F", "/T")
+	return cmd.Run()
+}
+
+func TempAuthFile(username, password string) (string, func(), error) {
+	f, err := os.CreateTemp("", "blaze-auth-*.txt")
+	if err != nil {
+		return "", nil, err
+	}
+	fmt.Fprintf(f, "%s\n%s\n", username, password)
+	f.Close()
+	cleanup := func() { _ = os.Remove(f.Name()) }
+	return f.Name(), cleanup, nil
+}
+
+func ConfigCheckPath(serverID, proto string) string {
+	return filepath.Join(cacheDir(), fmt.Sprintf("%s-%s.ovpn", serverID, proto))
+}
+
+func cacheDir() string {
+	local := os.Getenv("LOCALAPPDATA")
+	if local == "" {
+		home, _ := os.UserHomeDir()
+		local = filepath.Join(home, "AppData", "Local")
+	}
+	return filepath.Join(local, "BlazeVPN", "configs")
+}
+
