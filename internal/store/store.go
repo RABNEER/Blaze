@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"golang.org/x/tools/go/analysis/passes/nilfunc"
 )
 
 type State struct {
@@ -16,32 +14,32 @@ type State struct {
 	Hostname   string    `json:"hostname"`
 	Proto      string    `json:"proto"`
 	ConfigPath string    `json:"config_path"`
-	StartedAt  time.Time `json:"started_at"`	
+	StartedAt  time.Time `json:"started_at"`
 }
 
 type CachedCreds struct {
-	Username	string		`json:"username"`
-	Password	string		`json:"password"`
-	LastUpdated	string		`json:last_updated"`
-	FetchedAt	time.Time	`json:"fetched_at"`	
+	Username    string    `json:"username"`
+	Password    string    `json:"password"`
+	LastUpdated string    `json:"last_updated"`
+	FetchedAt   time.Time `json:"fetched_at"`
 }
 
 func BaseDir() string {
 	local := os.Getenv("LOCALAPPDATA")
-	if local == ""{
+	if local == "" {
 		home, _ := os.UserHomeDir()
 		local = filepath.Join(home, "AppData", "Local")
 	}
 	return filepath.Join(local, "BlazeVPN")
 }
 
-func ConfigsDir() string { return filepath.Join(BaseDir(), "configs")}
-func StatePath() string { return filepath.Join(BaseDir(), "state.json")}
-func CredsPath() string {return filepath.Join(BaseDir(), "creds.json")}
-func StopFlagPath() string {filepath.Join(BaseDir(), "stop.flag")}
+func ConfigsDir() string   { return filepath.Join(BaseDir(), "configs") }
+func StatePath() string    { return filepath.Join(BaseDir(), "state.json") }
+func CredsPath() string    { return filepath.Join(BaseDir(), "creds.json") }
+func StopFlagPath() string { return filepath.Join(BaseDir(), "stop.flag") }
 
 func EnsureDirs() error {
-	for _, d := range []string {BaseDir(), ConfigsDir()} {
+	for _, d := range []string{BaseDir(), ConfigsDir()} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
@@ -49,7 +47,27 @@ func EnsureDirs() error {
 	return nil
 }
 
-func ClearState() { _= os.Remove(StatePath()) }
+func ClearState() { _ = os.Remove(StatePath()) }
+
+func LoadState() (*State, error) {
+	data, err := os.ReadFile(StatePath())
+	if err != nil {
+		return nil, err
+	}
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func SaveState(s *State) error {
+	data, err := json.MarshalIndent(s, "", "\t")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(StatePath(), data, 0o600)
+}
 
 func LoadCreds() (*CachedCreds, error) {
 	data, err := os.ReadFile(CredsPath())
@@ -57,16 +75,16 @@ func LoadCreds() (*CachedCreds, error) {
 		return nil, err
 	}
 	var c CachedCreds
-	if err := json.Unmarshal(data, &c); err !=nil {
+	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
 	return &c, nil
 }
 
 func SaveCreds(c *CachedCreds) error {
-	data err := json.MarshalIndent(c, "", "	")
+	data, err := json.MarshalIndent(c, "", "\t")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(CredsPath(), data. 0o600)
+	return os.WriteFile(CredsPath(), data, 0o600)
 }

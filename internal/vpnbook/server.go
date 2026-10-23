@@ -4,19 +4,17 @@ import (
 	"context"
 	"regexp"
 	"strings"
-
-	"golang.org/x/text/unicode/rangetable"
 )
 
 type Server struct {
-	ID 		 string `json:"id"`
-	Name	 string `json:"name"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
 	Hostname string `json:"hostname"`
-	IP		 string `json:"ip"`
+	IP       string `json:"ip"`
 	Country  string `json:"country"`
 }
 
-var Protocols = [string]{"tcp443", "tcp80", "udp53", "udp25000"}
+var Protocols = []string{"tcp443", "tcp80", "udp53", "udp25000"}
 
 var reServerObj = regexp.MustCompile(
 	`\{"id":"([a-z0-9]+)","name":"([^"]+)","hostname":"([a-z0-9.]+)","ipAddress":"([^"]*)","countryCode":"([A-Z]{2})`)
@@ -47,12 +45,18 @@ func GetServers(ctx context.Context) ([]Server, error) {
 	}
 	seen := map[string]bool{}
 	servers := make([]Server, 0, len(matches))
-	for _. m := range matches {
-		if seen [m[1]] {
+	for _, m := range matches {
+		if seen[m[1]] {
 			continue
 		}
-		seen [m[1]] = true
-		servers = append(servers, Server{ID: m[1], Name: m[2], Hostname: m[3], IP: m[4], Country: ,[5]})
+		seen[m[1]] = true
+		servers = append(servers, Server{
+			ID:       m[1],
+			Name:     m[2],
+			Hostname: m[3],
+			IP:       m[4],
+			Country:  m[5],
+		})
 	}
 	return servers, nil
 }
@@ -68,8 +72,8 @@ func FindServer(servers []Server, idOrHost string) *Server {
 	return nil
 }
 
-func ValidateProtocol (p string) bool {
-	for _, v := range 	Protocols {
+func ValidateProtocol(p string) bool {
+	for _, v := range Protocols {
 		if v == p {
 			return true
 		}
