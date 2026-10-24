@@ -11,10 +11,14 @@ import (
 	"time"
 
 	"Blaze/internal/engine"
+	"Blaze/internal/ghost"
 	"Blaze/internal/netcheck"
 	"Blaze/internal/store"
 	"Blaze/internal/vpnbook"
 	"Blaze/ui"
+
+	"github.com/0xrawsec/golang-utils/args"
+	"golang.org/x/text/cases"
 )
 
 func main() {
@@ -37,6 +41,8 @@ func main() {
 		runDisconnect()
 	case "connect":
 		runConnect(os.Args[2:])
+	case "hop", "ghost"
+		runHop(os.Args[2:])
 	default:
 		ui.Warn(fmt.Sprintf("Unknown command: %s", os.Args[1]))
 		printUsage()
@@ -53,6 +59,7 @@ func printUsage() {
 	fmt.Println("  connect [id] [flags]    Connect to a server (or pick the fastest)")
 	fmt.Println("  disconnect              Stop active OpenVPN connection")
 	fmt.Println("  status                  Show current VPN tunnel status")
+	fmt.Println("  hop [flags]			   Auto-rotate IP across Countries at Set Intervals")
 	fmt.Println()
 	fmt.Println("Connect Flags:")
 	fmt.Println("  --fastest               Automatically select server with lowest latency")
@@ -294,6 +301,111 @@ func runConnect(args []string) {
 			ui.Error(fmt.Sprintf("OpenVPN process ended with error: %v", err))
 		} else {
 			ui.Info("OpenVPN process closed.")
+		}
+	}
+}
+
+func runHop(args []string) {
+	if !engine.IsAdmin() {
+		ui.Warn("Ghost Hop requires Administrator Priviles to manage routing.")
+		ui.Warn("Requesting Windows UAC elevation...")
+
+		if err := engine.SelfElevate(os.Args[1:]); err != nil {
+			ui.Error(fmt.Sprintf("UAC Elevation Failed: %v", err))
+		}
+		return
+	}
+	fs := flag.NewFlagSet("hop", flag.ExitOnError)
+	Interval := fs.Duration("every", 3*time.Minute, "Rotation interval (e.g. 1m, 3m, 5m)")
+	_ = fs.Parse(args)
+
+	
+	ovpnBin, found := engine.FindBinary()
+		if !found {
+			ui.Error("openvpn.exe not found! Please Install OpenVPN.")
+
+		return
+		
+	}
+
+	ctx := context.Background()
+
+	ui.Info("Initialize Ghost Protocol....")
+	servers, err := vpnbook.GetServers(ctx)
+	if err != nil {
+		ui.Error(fmt.Sprintf("Failed to fetch servers: %v", err))
+
+		return
+	}
+
+	creds, err :=  vpnbook.GetCredentials(ctx)
+	if err != nil {
+		ui.Error(fmt.Sprintf("Failed to fetch credentials: %v", err))
+
+		return
+	}
+
+	fmt.Println()
+	ui.Info(fmt.Sprintf("Ghost Protocol is Active - Rotating IP every %v", *interval))
+	ui.Info("Press Ctrl+C to terminate Ghost Mode and Close tunnel")
+	fmt.Println()
+
+	currentCountry := ""
+	var currentCmd *exec.Cmd
+
+	cleanup := func() {
+		if currentCmd != nil && currentCmd.Process != nil {
+			_= engine.KillProcess(currentCmd.Process.Pid)
+		}
+
+		store.ClearState()
+		ghost.FlushNetworkCaches()
+		ui.Success("Ghost Protocol deactivated. Identity Wiped")
+	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	doHop := func() {
+		target, cmd, err := ghost.ExecuteHop(ctx, *proto, currentCountry, servers, creds, ovpnBin)
+
+		if err != nil {
+			ui.Error(fmt.Sprintf("Hop Failed: %v", err))
+			
+			return
+		}
+
+		currentCmd = cmd 
+
+		currentCountry = target.Country
+
+		time.Sleep(5 * time.Second)
+
+		newIP := ghost.FetchPublicIP(ctx)
+
+		ui.Succes(fmt.Sprintf("Identity Active: %s (%s) | Verified IP: %s", target.Name, target.Country, &newIP))
+
+		ui.Info(fmt.Sprintf("Next hop in %v...", *interval))
+
+		fmt.Println()
+	}
+
+	doHop()
+
+
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-sigChan:
+			fmt.Println()
+				ui.Warn("Interrupt received. Disconnecting...")
+				cleanup()
+				return
+			case <-ticker.C:
+				ui.Info("Hop Interval Reached. Rotating Identity...")
+				doHop()
+			
 		}
 	}
 }
