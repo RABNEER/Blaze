@@ -1,7 +1,6 @@
 package ghost
 
 import (
-	"Blaze/internal/vpnbook"
 	"context"
 	"fmt"
 	"io"
@@ -17,10 +16,9 @@ import (
 	"Blaze/internal/store"
 	"Blaze/internal/vpnbook"
 	"Blaze/ui"
-
 )
 
-func FlushNetworkCaches()
+func FlushNetworkCaches() {
 	dnsCmd := exec.Command("ipconfig", "/flushdns")
 	dnsCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = dnsCmd.Run()
@@ -28,35 +26,34 @@ func FlushNetworkCaches()
 	arpCmd := exec.Command("netsh", "interface", "ip", "delete", "arpcache")
 	arpCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = arpCmd.Run()
+}
 
 func FetchPublicIP(ctx context.Context) string {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipify.org", nil )
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipify.org", nil)
 	if err != nil {
 		return "unknown"
 	}
 
-	client := &http.client{timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "checking"
+		return "checking..."
 	}
-
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
 	if err != nil {
-		return "I dont know"
+		return "unknown"
 	}
 	return strings.TrimSpace(string(body))
 }
 
-func PickNextServer (servers []vpnbook.Server, currentCountry string) *vpnbook.Server {
+func PickNextServer(servers []vpnbook.Server, currentCountry string) *vpnbook.Server {
 	var candidates []vpnbook.Server
 
 	for _, s := range servers {
 		if s.Country != currentCountry {
 			candidates = append(candidates, s)
-			
 		}
 	}
 
@@ -74,54 +71,50 @@ func ExecuteHop(ctx context.Context, proto string, currentCountry string, server
 		if engine.ProcessAlive(state.Pid) {
 			_ = engine.KillProcess(state.Pid)
 		}
-		
 		store.ClearState()
 	}
 
-	ui.info("Sanitizing network traces (Flushing DNA & ARP Caches)...")
-	FLushNetworkCaches()
+	ui.Info("Sanitizing network traces (Flushing DNS & ARP caches)...")
+	FlushNetworkCaches()
 
-	target := PickNextServer(server, currentCountry)
-	ui.info(fmt.Sprintf("Routing Through Next Location: %s [%s]..", target.Name, target.Country))
+	target := PickNextServer(servers, currentCountry)
+	ui.Info(fmt.Sprintf("Routing through next location: %s [%s]...", target.Name, target.Country))
 
-	configPath := engine.configPath(target.ID, proto)
+	configPath := engine.ConfigCheckPath(target.ID, proto)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		ovpnData, err := vpnbook.DownloadConfig(ctx, target.Hostname, proto)
 		if err != nil {
-
 			return nil, nil, fmt.Errorf("failed to download config for %s: %w", target.Name, err)
-
 		}
 		_ = os.WriteFile(configPath, ovpnData, 0o600)
-
 	}
-	authFile, cleanupAuth, err := engine.TempAuthfile(creds.Username, creds.Password)
-	 if err != nil {
-		return nil, nil, fmt.Errorf("Failed to create auth file: %w", err)
-	 }
-	 defer cleanupAuth
 
-	 cmd := exec.Command(ovpnBin,
-			"--config", configPath,
-		
-			"--auth-user-pass", authFile
-		
-			"--auth-nocache",
-		)
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
-		if err := cmd.Start(); err != nil {
-			return nil, nil, fmt.Errorf("Failed to Start OpenVPN: %w", err)
-		}
-		activeState := &store.State{
-			Pid:		cmd.Process.Pid,
-			ServerID:	target.ID,
-			ServerName:	target.Name,
-			Hostname:	target.Hostname,
-			Proto:		proto,
-			ConfigPath:	configPath,
-			StartedAt:	time.Now(),
-		}
-		_ = store.SaveState(activeState)
+	authFile, cleanupAuth, err := engine.TempAuthFile(creds.Username, creds.Password)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create auth file: %w", err)
+	}
+	defer cleanupAuth()
 
-		return target, cmd, nil
+	cmd := exec.Command(ovpnBin,
+		"--config", configPath,
+		"--auth-user-pass", authFile,
+		"--auth-nocache",
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
+	if err := cmd.Start(); err != nil {
+		return nil, nil, fmt.Errorf("failed to start OpenVPN: %w", err)
+	}
+
+	activeState := &store.State{
+		Pid:        cmd.Process.Pid,
+		ServerID:   target.ID,
+		ServerName: target.Name,
+		Hostname:   target.Hostname,
+		Proto:      proto,
+		ConfigPath: configPath,
+		StartedAt:  time.Now(),
+	}
+	_ = store.SaveState(activeState)
+
+	return target, cmd, nil
 }

@@ -16,9 +16,6 @@ import (
 	"Blaze/internal/store"
 	"Blaze/internal/vpnbook"
 	"Blaze/ui"
-
-	"github.com/0xrawsec/golang-utils/args"
-	"golang.org/x/text/cases"
 )
 
 func main() {
@@ -41,7 +38,7 @@ func main() {
 		runDisconnect()
 	case "connect":
 		runConnect(os.Args[2:])
-	case "hop", "ghost"
+	case "hop", "ghost":
 		runHop(os.Args[2:])
 	default:
 		ui.Warn(fmt.Sprintf("Unknown command: %s", os.Args[1]))
@@ -59,11 +56,12 @@ func printUsage() {
 	fmt.Println("  connect [id] [flags]    Connect to a server (or pick the fastest)")
 	fmt.Println("  disconnect              Stop active OpenVPN connection")
 	fmt.Println("  status                  Show current VPN tunnel status")
-	fmt.Println("  hop [flags]			   Auto-rotate IP across Countries at Set Intervals")
+	fmt.Println("  hop [flags]             Auto-rotate IP across countries at set intervals")
 	fmt.Println()
-	fmt.Println("Connect Flags:")
+	fmt.Println("Connect & Hop Flags:")
 	fmt.Println("  --fastest               Automatically select server with lowest latency")
 	fmt.Println("  --proto <protocol>      Protocol to use: tcp443 (default), tcp80, udp53, udp25000")
+	fmt.Println("  --every <duration>      Rotation interval for hop (e.g. 1m, 3m, 5m)")
 	fmt.Println()
 }
 
@@ -144,7 +142,6 @@ func runDisconnect() {
 }
 
 func runConnect(args []string) {
-	// 1. Check Administrator Privileges
 	if !engine.IsAdmin() {
 		ui.Warn("OpenVPN requires Administrator privileges to configure routing.")
 		ui.Info("Requesting Windows UAC elevation...")
@@ -154,7 +151,6 @@ func runConnect(args []string) {
 		return
 	}
 
-	// 2. Parse flags
 	fs := flag.NewFlagSet("connect", flag.ExitOnError)
 	fastest := fs.Bool("fastest", false, "Connect to the lowest latency server")
 	proto := fs.String("proto", "tcp443", "Protocol (tcp443, tcp80, udp53, udp25000)")
@@ -165,14 +161,12 @@ func runConnect(args []string) {
 		return
 	}
 
-	// 3. Find OpenVPN binary
 	ovpnBin, found := engine.FindBinary()
 	if !found {
 		ui.Error("openvpn.exe not found! Please install OpenVPN.")
 		return
 	}
 
-	// 4. Check if already connected
 	if state, err := store.LoadState(); err == nil && state != nil {
 		if engine.ProcessAlive(state.Pid) {
 			ui.Warn(fmt.Sprintf("Already connected to %s (PID %d). Run 'blaze disconnect' first.", state.ServerName, state.Pid))
@@ -183,7 +177,6 @@ func runConnect(args []string) {
 
 	ctx := context.Background()
 
-	// 5. Fetch server list
 	servers, err := vpnbook.GetServers(ctx)
 	if err != nil {
 		ui.Error(fmt.Sprintf("Failed to get server list: %v", err))
@@ -219,7 +212,6 @@ func runConnect(args []string) {
 		}
 	}
 
-	// 6. Fetch live rotating credentials
 	ui.Info("Fetching live credentials from VPNBook...")
 	creds, err := vpnbook.GetCredentials(ctx)
 	if err != nil {
@@ -227,7 +219,6 @@ func runConnect(args []string) {
 		return
 	}
 
-	// 7. Ensure .ovpn config is downloaded and cached
 	configPath := engine.ConfigCheckPath(target.ID, *proto)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		ui.Info(fmt.Sprintf("Downloading configuration for %s (%s)...", target.Name, *proto))
@@ -242,7 +233,6 @@ func runConnect(args []string) {
 		}
 	}
 
-	// 8. Create temporary credential file and defer its deletion
 	authFile, cleanupAuth, err := engine.TempAuthFile(creds.Username, creds.Password)
 	if err != nil {
 		ui.Error(fmt.Sprintf("Failed to create temporary auth file: %v", err))
@@ -250,7 +240,6 @@ func runConnect(args []string) {
 	}
 	defer cleanupAuth()
 
-	// 9. Launch OpenVPN process
 	ui.Info(fmt.Sprintf("Starting tunnel to %s [%s]...", target.Name, *proto))
 	cmd := exec.Command(ovpnBin,
 		"--config", configPath,
@@ -264,7 +253,6 @@ func runConnect(args []string) {
 		return
 	}
 
-	// 10. Record session in state.json
 	activeState := &store.State{
 		Pid:        cmd.Process.Pid,
 		ServerID:   target.ID,
@@ -279,7 +267,6 @@ func runConnect(args []string) {
 	ui.Success(fmt.Sprintf("Tunnel process started! PID: %d", cmd.Process.Pid))
 	ui.Info("Press Ctrl+C to disconnect...")
 
-	// 11. Listen for Ctrl+C or process termination using channels
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -307,47 +294,43 @@ func runConnect(args []string) {
 
 func runHop(args []string) {
 	if !engine.IsAdmin() {
-		ui.Warn("Ghost Hop requires Administrator Priviles to manage routing.")
-		ui.Warn("Requesting Windows UAC elevation...")
-
+		ui.Warn("Ghost Hop requires Administrator privileges to manage routing.")
+		ui.Info("Requesting Windows UAC elevation...")
 		if err := engine.SelfElevate(os.Args[1:]); err != nil {
-			ui.Error(fmt.Sprintf("UAC Elevation Failed: %v", err))
+			ui.Error(fmt.Sprintf("UAC elevation failed: %v", err))
 		}
 		return
 	}
+
 	fs := flag.NewFlagSet("hop", flag.ExitOnError)
-	Interval := fs.Duration("every", 3*time.Minute, "Rotation interval (e.g. 1m, 3m, 5m)")
+	interval := fs.Duration("every", 3*time.Minute, "Rotation interval (e.g. 1m, 3m, 5m)")
+	proto := fs.String("proto", "tcp443", "Protocol to use")
 	_ = fs.Parse(args)
 
-	
 	ovpnBin, found := engine.FindBinary()
-		if !found {
-			ui.Error("openvpn.exe not found! Please Install OpenVPN.")
-
+	if !found {
+		ui.Error("openvpn.exe not found! Please install OpenVPN.")
 		return
-		
 	}
 
 	ctx := context.Background()
 
-	ui.Info("Initialize Ghost Protocol....")
+	ui.Info("Initializing Ghost Protocol...")
 	servers, err := vpnbook.GetServers(ctx)
 	if err != nil {
 		ui.Error(fmt.Sprintf("Failed to fetch servers: %v", err))
-
 		return
 	}
 
-	creds, err :=  vpnbook.GetCredentials(ctx)
+	creds, err := vpnbook.GetCredentials(ctx)
 	if err != nil {
-		ui.Error(fmt.Sprintf("Failed to fetch credentials: %v", err))
-
+		ui.Error(fmt.Sprintf("Could not fetch credentials: %v", err))
 		return
 	}
 
 	fmt.Println()
-	ui.Info(fmt.Sprintf("Ghost Protocol is Active - Rotating IP every %v", *interval))
-	ui.Info("Press Ctrl+C to terminate Ghost Mode and Close tunnel")
+	ui.Info(fmt.Sprintf("👻 GHOST PROTOCOL ACTIVE — Rotating IP every %v", *interval))
+	ui.Info("Press Ctrl+C to terminate Ghost Mode and close tunnel.")
 	fmt.Println()
 
 	currentCountry := ""
@@ -355,12 +338,11 @@ func runHop(args []string) {
 
 	cleanup := func() {
 		if currentCmd != nil && currentCmd.Process != nil {
-			_= engine.KillProcess(currentCmd.Process.Pid)
+			_ = engine.KillProcess(currentCmd.Process.Pid)
 		}
-
 		store.ClearState()
 		ghost.FlushNetworkCaches()
-		ui.Success("Ghost Protocol deactivated. Identity Wiped")
+		ui.Success("Ghost Protocol deactivated. Identity wiped.")
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -368,44 +350,36 @@ func runHop(args []string) {
 
 	doHop := func() {
 		target, cmd, err := ghost.ExecuteHop(ctx, *proto, currentCountry, servers, creds, ovpnBin)
-
 		if err != nil {
-			ui.Error(fmt.Sprintf("Hop Failed: %v", err))
-			
+			ui.Error(fmt.Sprintf("Hop failed: %v", err))
 			return
 		}
-
-		currentCmd = cmd 
-
+		currentCmd = cmd
 		currentCountry = target.Country
 
 		time.Sleep(5 * time.Second)
-
 		newIP := ghost.FetchPublicIP(ctx)
 
-		ui.Succes(fmt.Sprintf("Identity Active: %s (%s) | Verified IP: %s", target.Name, target.Country, &newIP))
-
+		ui.Success(fmt.Sprintf("Identity Active: %s (%s) | Verified IP: %s", target.Name, target.Country, newIP))
 		ui.Info(fmt.Sprintf("Next hop in %v...", *interval))
-
 		fmt.Println()
 	}
 
 	doHop()
 
-
+	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-sigChan:
 			fmt.Println()
-				ui.Warn("Interrupt received. Disconnecting...")
-				cleanup()
-				return
-			case <-ticker.C:
-				ui.Info("Hop Interval Reached. Rotating Identity...")
-				doHop()
-			
+			ui.Warn("Interrupt received. Disconnecting...")
+			cleanup()
+			return
+		case <-ticker.C:
+			ui.Info("⚡ Hop interval reached. Rotating identity...")
+			doHop()
 		}
 	}
 }
