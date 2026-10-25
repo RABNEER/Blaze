@@ -10,9 +10,15 @@ import (
 	"syscall"
 	"time"
 
+	"Blaze/internal/dnsfilter"
 	"Blaze/internal/engine"
 	"Blaze/internal/ghost"
+	"Blaze/internal/killswitch"
+	"Blaze/internal/monitor"
 	"Blaze/internal/netcheck"
+	panicPkg "Blaze/internal/panic"
+	"Blaze/internal/shield"
+	"Blaze/internal/spoof"
 	"Blaze/internal/store"
 	"Blaze/internal/vpnbook"
 	"Blaze/ui"
@@ -40,6 +46,20 @@ func main() {
 		runConnect(os.Args[2:])
 	case "hop", "ghost":
 		runHop(os.Args[2:])
+	case "audit":
+		runAudit()
+	case "shield":
+		runShield(os.Args[2:])
+	case "monitor", "speed":
+		runMonitor()
+	case "panic", "nuke":
+		runPanic()
+	case "spoof":
+		runSpoof(os.Args[2:])
+	case "block", "sinkhole":
+		runSinkhole()
+	case "killswitch", "ks":
+		runKillSwitch(os.Args[2:])
 	default:
 		ui.Warn(fmt.Sprintf("Unknown command: %s", os.Args[1]))
 		printUsage()
@@ -48,7 +68,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println()
-	ui.Info("Blaze - Fast Windows OpenVPN Client")
+	ui.Info("Blaze - Fast Windows OpenVPN Client & Security Suite")
 	fmt.Println("Usage: blaze <command> [arguments]")
 	fmt.Println()
 	fmt.Println("Commands:")
@@ -57,6 +77,13 @@ func printUsage() {
 	fmt.Println("  disconnect              Stop active OpenVPN connection")
 	fmt.Println("  status                  Show current VPN tunnel status")
 	fmt.Println("  hop [flags]             Auto-rotate IP across countries at set intervals")
+	fmt.Println("  audit                   Pen-test your connection for IPv6 and DNS leaks")
+	fmt.Println("  shield [--on | --off]   Harden Windows network stack against leaks")
+	fmt.Println("  monitor                 Real-time OpenVPN bandwidth speedometer & telemetry")
+	fmt.Println("  spoof [--reset]         Randomize physical network adapter MAC address")
+	fmt.Println("  panic                   Emergency zero-trace wipe (kill processes, shred configs)")
+	fmt.Println("  block                   Local UDP DNS sinkhole: real-time ad/tracker blocker")
+	fmt.Println("  killswitch [--on|--off] Strict firewall kill-switch: blocks all non-VPN leaks")
 	fmt.Println()
 	fmt.Println("Connect & Hop Flags:")
 	fmt.Println("  --fastest               Automatically select server with lowest latency")
@@ -245,6 +272,7 @@ func runConnect(args []string) {
 		"--config", configPath,
 		"--auth-user-pass", authFile,
 		"--auth-nocache",
+		"--management", "127.0.0.1", "7505",
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 
@@ -380,6 +408,177 @@ func runHop(args []string) {
 		case <-ticker.C:
 			ui.Info("⚡ Hop interval reached. Rotating identity...")
 			doHop()
+		}
+	}
+}
+
+func runAudit() {
+	ctx := context.Background()
+	ui.Info("Running Security & Privacy Leak Audit...")
+	fmt.Println()
+
+	currentIP := ghost.FetchPublicIP(ctx)
+	report := shield.RunAudit(ctx, currentIP)
+
+	fmt.Println("=======================================================")
+	fmt.Println("                PRIVACY LEAK AUDIT REPORT              ")
+	fmt.Println("=======================================================")
+	fmt.Printf("  • Public IPv4 Address: %s\n", report.IPv4Address)
+
+	if report.IPv6Leaking {
+		ui.Error(fmt.Sprintf("IPv6 LEAK DETECTED: %s", report.IPv6Address))
+		fmt.Println("    ↳ Websites can bypass your VPN and see your real ISP via IPv6!")
+	} else {
+		ui.Success("IPv6 Leak: PROTECTED (No IPv6 exposure)")
+	}
+
+	if report.DNSLeaking {
+		ui.Error(fmt.Sprintf("DNS LEAK DETECTED: %v", report.DNSServers))
+		fmt.Println("    ↳ Windows is querying your local router or ISP DNS directly!")
+	} else {
+		ui.Success(fmt.Sprintf("DNS Leak: PROTECTED (Active DNS: %v)", report.DNSServers))
+	}
+
+	fmt.Println("-------------------------------------------------------")
+	if report.SecurityScore == 100 {
+		ui.Success(fmt.Sprintf("SECURITY SCORE: %d%% [AIR-TIGHT]", report.SecurityScore))
+	} else {
+		ui.Warn(fmt.Sprintf("SECURITY SCORE: %d%% [VULNERABLE]", report.SecurityScore))
+		ui.Info("Tip: Run 'blaze shield --on' to seal all detected leaks.")
+	}
+	fmt.Println("=======================================================")
+	fmt.Println()
+}
+
+func runShield(args []string) {
+	if !engine.IsAdmin() {
+		ui.Warn("Cyber Shield requires Administrator privileges to configure adapters.")
+		ui.Info("Requesting Windows UAC elevation...")
+		if err := engine.SelfElevate(os.Args[1:]); err != nil {
+			ui.Error(fmt.Sprintf("UAC elevation failed: %v", err))
+		}
+		return
+	}
+
+	fs := flag.NewFlagSet("shield", flag.ExitOnError)
+	on := fs.Bool("on", false, "Enable leak protection (block IPv6, enforce secure DNS)")
+	off := fs.Bool("off", false, "Disable leak protection (restore Windows defaults)")
+	_ = fs.Parse(args)
+
+	if *off {
+		if err := shield.DisableShield(); err != nil {
+			ui.Error(fmt.Sprintf("Failed to disable shield: %v", err))
+			return
+		}
+		ui.Success("Shield deactivated. Windows network settings restored.")
+		return
+	}
+
+	if *on || (!*on && !*off) {
+		if err := shield.EnableShield(); err != nil {
+			ui.Error(fmt.Sprintf("Failed to enable shield: %v", err))
+			return
+		}
+		ui.Success("Shield ACTIVATED! All leak vectors sealed.")
+		fmt.Println()
+		runAudit()
+	}
+}
+
+func runPanic() {
+	panicPkg.ExecutePanic()
+}
+
+func runSpoof(args []string) {
+	if !engine.IsAdmin() {
+		ui.Warn("MAC Spoofer requires Administrator privileges to modify network adapters.")
+		ui.Info("Requesting Windows UAC elevation...")
+		if err := engine.SelfElevate(os.Args[1:]); err != nil {
+			ui.Error(fmt.Sprintf("UAC elevation failed: %v", err))
+		}
+		return
+	}
+
+	fs := flag.NewFlagSet("spoof", flag.ExitOnError)
+	reset := fs.Bool("reset", false, "Restore original factory hardware MAC address")
+	_ = fs.Parse(args)
+
+	if *reset {
+		if err := spoof.ResetSpoof(); err != nil {
+			ui.Error(fmt.Sprintf("Failed to reset MAC address: %v", err))
+		}
+		return
+	}
+
+	if err := spoof.ApplySpoof(); err != nil {
+		ui.Error(fmt.Sprintf("MAC Spoofing error: %v", err))
+	}
+}
+
+func runMonitor() {
+	ctx := context.Background()
+	if err := monitor.StartMonitor(ctx); err != nil {
+		ui.Error(fmt.Sprintf("Telemetry error: %v", err))
+	}
+}
+
+func runSinkhole() {
+	if !engine.IsAdmin() {
+		ui.Warn("Binding to port 53 requires Administrator privileges.")
+		ui.Info("Requesting Windows UAC elevation...")
+		if err := engine.SelfElevate(os.Args[1:]); err != nil {
+			ui.Error(fmt.Sprintf("UAC elevation failed: %v", err))
+		}
+		return
+	}
+
+	server := dnsfilter.NewServer("127.0.0.1:53", "1.1.1.1:53")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Println()
+		ui.Info("Terminating DNS Sinkhole...")
+		cancel()
+	}()
+
+	if err := server.Start(ctx); err != nil {
+		ui.Error(fmt.Sprintf("Sinkhole error: %v", err))
+	}
+}
+
+func runKillSwitch(args []string) {
+	if !engine.IsAdmin() {
+		ui.Warn("Kill Switch requires Administrator privileges to modify firewall rules.")
+		ui.Info("Requesting Windows UAC elevation...")
+		if err := engine.SelfElevate(os.Args[1:]); err != nil {
+			ui.Error(fmt.Sprintf("UAC elevation failed: %v", err))
+		}
+		return
+	}
+
+	fs := flag.NewFlagSet("killswitch", flag.ExitOnError)
+	on := fs.Bool("on", false, "Arm the firewall kill-switch")
+	off := fs.Bool("off", false, "Disarm the kill-switch and restore full outbound traffic")
+	_ = fs.Parse(args)
+
+	if *off {
+		if err := killswitch.Disable(); err != nil {
+			ui.Error(fmt.Sprintf("Failed to disable kill-switch: %v", err))
+			return
+		}
+		ui.Success("Kill-Switch DISARMED: Full outbound traffic restored.")
+		return
+	}
+
+	if *on || (!*on && !*off) {
+		if err := killswitch.Enable(); err != nil {
+			ui.Error(fmt.Sprintf("Failed to enable kill-switch: %v", err))
+			return
 		}
 	}
 }

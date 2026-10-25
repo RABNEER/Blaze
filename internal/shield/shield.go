@@ -15,16 +15,16 @@ import (
 	"Blaze/ui"
 )
 
-type AuditReport struct{
-	IPv4Address		string
-	IPv6Address		string
-	IPv6Leaking		bool
-	DNSLeaking		bool
-	DNSServers		[]string
-	SecurityScore	int//0 to 100%
+type AuditReport struct {
+	IPv4Address   string
+	IPv6Address   string
+	IPv6Leaking   bool
+	DNSLeaking    bool
+	DNSServers    []string
+	SecurityScore int // 0 to 100%
 }
 
-func CheckIPv6Leak (ctx context.Context) (bool, string) {
+func CheckIPv6Leak(ctx context.Context) (bool, string) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -38,7 +38,6 @@ func CheckIPv6Leak (ctx context.Context) (bool, string) {
 	if err != nil {
 		return false, ""
 	}
-
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
@@ -55,12 +54,9 @@ func CheckIPv6Leak (ctx context.Context) (bool, string) {
 }
 
 func CheckDNSLeaks() (bool, []string) {
-	cmd :=  exec.Command("powershell", "-NoProfile", "-Command",
-		"Get-DnsClientServerAddress	-AddressFamily	IPv4 | Select-Object -ExpandProperty
-		
-		Server Address")
-
-	cmd.SysProAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd := exec.Command("powershell", "-NoProfile", "-Command",
+		`Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses`)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -73,38 +69,28 @@ func CheckDNSLeaks() (bool, []string) {
 
 	for _, line := range rawLines {
 		ip := strings.TrimSpace(line)
-
 		if ip == "" {
-
 			continue
 		}
 
-	
+		dnsList = append(dnsList, ip)
 
-	dnsList = append(dnsList, ip)
-
-	if strings.HasPrefix(ip, "192.168.") || strings.HasPrefix((ip, "10.")) ||
-
-	strings.HasPrefix(ip, "172.") {
-
-		isLeaking = true
-	}
-
+		if strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "172.") {
+			isLeaking = true
+		}
 	}
 
 	return isLeaking, dnsList
-
 }
 
 func RunAudit(ctx context.Context, currentIPv4 string) *AuditReport {
 	report := &AuditReport{
-		IPv4Address: currentIPv4,
-
+		IPv4Address:   currentIPv4,
 		SecurityScore: 100,
 	}
 
 	v6leak, v6Addr := CheckIPv6Leak(ctx)
-	report.IPv6Address = v6Leak
+	report.IPv6Leaking = v6leak
 	report.IPv6Address = v6Addr
 
 	if v6leak {
@@ -114,63 +100,64 @@ func RunAudit(ctx context.Context, currentIPv4 string) *AuditReport {
 	dnsLeak, dnsServers := CheckDNSLeaks()
 	report.DNSLeaking = dnsLeak
 	report.DNSServers = dnsServers
-	
+
 	if dnsLeak {
-		report.SecurityScore -=40
+		report.SecurityScore -= 40
 	}
 
 	if report.SecurityScore < 0 {
 		report.SecurityScore = 0
 	}
-	 return report
+
+	return report
 }
 
 func EnableShield() error {
 	if !engine.IsAdmin() {
-		return fmt.Errorf("Administrator Privileges required to apply shield")
-
+		return fmt.Errorf("administrator privileges required to apply shield")
 	}
 
 	ui.Info("Applying Cyber Shield hardening...")
 
+	ui.Info("• Disabling IPv6 Network Stack (stopping IPv6 Leaks)...")
+	disableV6 := exec.Command("powershell", "-NoProfile", "-Command",
+		`Disable-NetAdapterBinding -Name * -ComponentId ms_tcpip6 -ErrorAction SilentlyContinue`)
+	disableV6.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	_ = disableV6.Run()
 
-	ui.Info("Dissabling IPv6 Network Stack (stopping IPv6 Leaks)...")
+	ui.Info("• Enforcing privacy DNS (1.1.1.1 & 9.9.9.9)...")
 	setDNS := exec.Command("powershell", "-NoProfile", "-Command",
-			'Get-NetAdapter | Where-Object Status -eq 'Up' | Set-DnsClientServerAddress
-			-ServerAddress ("1.1.1.1", "9.9.9.9") -ErrorAction SilentlyContinue' )
+		`Get-NetAdapter | Where-Object Status -eq 'Up' | Set-DnsClientServerAddress -ServerAddresses ("1.1.1.1","9.9.9.9") -ErrorAction SilentlyContinue`)
+	setDNS.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	_ = setDNS.Run()
 
-			setDNS.SysProAttr = &syscall.SysProcAttr{HideWindow: true}
-			=setDND.Run()
+	flushCmd := exec.Command("ipconfig", "/flushdns")
+	flushCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	_ = flushCmd.Run()
 
-			flushCmd := exec.Command("ipconfig", "/flushdns")
-			flushCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-			_ = flushCmd.Run()
-
-			return nil
+	return nil
 }
-
 
 func DisableShield() error {
 	if !engine.IsAdmin() {
-		return fmt.Errorf("Administrator Privileges Required to Disable Shield")
-
+		return fmt.Errorf("administrator privileges required to disable shield")
 	}
-	ui.Info("Reverting Cyber Shield To default Windows Settings..")
 
+	ui.Info("Reverting Cyber Shield to default Windows settings...")
+
+	enableV6 := exec.Command("powershell", "-NoProfile", "-Command",
+		`Enable-NetAdapterBinding -Name * -ComponentId ms_tcpip6 -ErrorAction SilentlyContinue`)
 	enableV6.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_ = enable.V6.Run()
+	_ = enableV6.Run()
 
-	resetDNA := exec.Command("powershell", "-NoProfile", "-Command",
-		"Get-NetAdapter | Set-DnsClientServerAddress -ResetServerAddresses -ErrorAction
-			SilentlyContinue")
-
+	resetDNS := exec.Command("powershell", "-NoProfile", "-Command",
+		`Get-NetAdapter | Set-DnsClientServerAddress -ResetServerAddresses -ErrorAction SilentlyContinue`)
 	resetDNS.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_= resetDNS.Run()
+	_ = resetDNS.Run()
 
 	flushCmd := exec.Command("ipconfig", "/flushdns")
-	flushCmd.SysProcAttr := &syscall.SysProcAttr{HideWindow: true}
-	_= flushCmd.Run()
+	flushCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	_ = flushCmd.Run()
 
 	return nil
-	
 }

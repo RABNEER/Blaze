@@ -99,6 +99,7 @@ func ExecuteHop(ctx context.Context, proto string, currentCountry string, server
 		"--config", configPath,
 		"--auth-user-pass", authFile,
 		"--auth-nocache",
+		"--management", "127.0.0.1", "7505",
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 	if err := cmd.Start(); err != nil {
