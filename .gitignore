@@ -1,2 +1,3 @@
-agentbox.db
-.db
+agentbox.db*
+*.db
+*.exe
